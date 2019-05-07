@@ -28,11 +28,11 @@
 // |       Rows 6 and 7       |
 // |--------------------------|
 // |  Space for 2 extra rows  | <--
-// |++++++++++++++++++++++++++|   | Node 2 sends rows 8 and 9 to Node 1
-// |      Rows 8 and 9        | ---
+// |++++++++++++++++++++++++++|   | Node 2 sends rows 8 and 4 to Node 1
+// |      Rows 8 and 4        | ---
 // |--------------------------|
 // |                          |
-// |      Rows 10 and 11      |
+// |      Rows 5 and 11      |
 // |                          |
 // |++++++++++++++++++++++++++|
 //
@@ -86,9 +86,9 @@ int main(int argc, char **argv) {
 
     // Prepare the computations for distributing by splitting to create an outer loop over the 
     // number of nodes
-    c_input.split(i, _ROWS/10, i0, i1);
-    c_blurx.split(i, _ROWS/10, i0, i1);
-    c_blury.split(i, _ROWS/10, i0, i1);
+    c_input.split(i, _ROWS/5, i0, i1);
+    c_blurx.split(i, _ROWS/5, i0, i1);
+    c_blury.split(i, _ROWS/5, i0, i1);
 
     // Tag the outer loop level over the number of nodes so that it is distributed. Internally,
     // this creates a new Var called "rank"
@@ -103,9 +103,9 @@ int main(int argc, char **argv) {
 
     // Create the communication (i.e. data transfer) for the borders
     xfer border_comm = computation::create_xfer(/*Iteration domain for the send. All nodes except Node 0 send two rows.*/
-                                                "[COLS]->{border_send[p,ii,jj]: 1<=p<10 and 0<=ii<2 and 0<=jj<COLS+2}",
+                                                "[COLS]->{border_send[p,ii,jj]: 1<=p<5 and 0<=ii<2 and 0<=jj<COLS+2}",
                                                 /*Iteration domain for the receive. All nodes except the last Node receive two rows.*/
-                                                "[COLS]->{border_recv[q,ii,jj]: 0<=q<9 and 0<=ii<2 and 0<=jj<COLS+2}",
+                                                "[COLS]->{border_recv[q,ii,jj]: 0<=q<4 and 0<=ii<2 and 0<=jj<COLS+2}",
                                                 /*The dest of each send relative to the send's iteration domain.*/ 
                                                 p-1,   
                                                 /*The src of each receive relative to receive's iteration domain.*/
@@ -119,10 +119,15 @@ int main(int argc, char **argv) {
     // Distribute the communication
     border_comm.s->tag_distribute_level(p);
     border_comm.r->tag_distribute_level(q);
+    border_comm.s->collapse(2, 0, -1, COLS+2);
+    border_comm.s->collapse(1, 0, -1, 2);
+    border_comm.r->collapse(2, 0, -1, COLS+2);
+    border_comm.r->collapse(1, 0, -1, 2);
 
     // Order computations and communication
     border_comm.s->before(*border_comm.r, computation::root);
     border_comm.r->before(c_blurx, computation::root);
+    
     c_blurx.before(c_blury, i0);
 
     // -------------------------------------------------------
@@ -131,18 +136,19 @@ int main(int argc, char **argv) {
 
     // Make each buffer's size relative to a single node. We add 2 extra rows and columns to account for the extra
     // data sent in the border and to prevent out-of-bounds accesses.
-    buffer b_input("b_input", {tiramisu::expr(_ROWS/10) + 2, tiramisu::expr(_COLS) + 2}, p_uint32, a_input, &blurxy);
-    buffer b_blurx("b_blurx", {tiramisu::expr(_ROWS/10), tiramisu::expr(_COLS) + 2}, p_uint32, a_temporary, &blurxy);
-    buffer b_blury("b_blury", {tiramisu::expr(_ROWS/10), tiramisu::expr(_COLS)}, p_uint32, a_output, &blurxy);
+    buffer b_input("b_input", {tiramisu::expr(_ROWS/5) + 2, tiramisu::expr(_COLS) + 2}, p_uint32, a_input, &blurxy);
+    buffer b_blurx("b_blurx", {tiramisu::expr(_ROWS/5), tiramisu::expr(_COLS) + 2}, p_uint32, a_temporary, &blurxy);
+    buffer b_blury("b_blury", {tiramisu::expr(_ROWS/5), tiramisu::expr(_COLS)}, p_uint32, a_output, &blurxy);
 
     // Map the computations to a buffer.
     // The send doesn't explicitly write out data (MPI handles that internally), but the receive does write to a buffer,
     // so it requires an access function as well.
     c_input.set_access("{c_input[i,j]->b_input[i,j]}");
-    border_comm.r->set_access("{border_recv[q,ii,jj]->b_input[" + std::to_string(_ROWS/10) + "+ii,jj]}");
+    border_comm.r->set_access("{border_recv[q,ii,jj]->b_input[" + std::to_string(_ROWS/5) + "+ii,jj]}");
     c_blurx.set_access("{c_blurx[i,j]->b_blurx[i,j]}");
     c_blury.set_access("{c_blury[i,j]->b_blury[i,j]}");
 
     blurxy.codegen({&b_input, &b_blury}, "build/generated_fct_developers_tutorial_12.o");
+    blurxy.gen_c_code();
 
 }
